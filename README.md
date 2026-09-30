@@ -15,7 +15,11 @@ Elegí fotos como en Tinder: deslizá a la derecha las que te gustan y se copian
 - Para usarlo desde el celular u otra PC: botón **Compartir** → escaneá el QR o mandate el link por WhatsApp. Tienen que estar en la misma red Wi-Fi.
 - Las fotos se copian, mueven o borran en la PC donde corre Kyro.
 
-Conviene correr Kyro en la PC que tiene las fotos: lee directo del disco y a los demás dispositivos solo les manda la vista previa.
+## Varias PCs
+
+Abrí Kyro en cada PC. Se encuentran solas en la red (si alguna no aparece: **+ Agregar PC** con su IP).
+Al elegir una carpeta, primero elegís el equipo: por ejemplo, las fotos de la PC de escritorio y el destino en la notebook.
+La sesión corre en la PC que tiene las fotos y los matches se envían a la otra, conservando la fecha original.
 
 ## Atajos
 
