@@ -257,6 +257,16 @@
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .grow { flex: 1; }
 
+  /* equipos con Kyro en la red */
+  .nodes { display: flex; gap: 6px; flex-wrap: wrap; }
+  .nodes button { display: flex; gap: 7px; align-items: center; font-size: 14px; border-radius: 20px; padding: 6px 12px; }
+  .nodes button.active { border-color: #fd4d5d; background: rgba(253,38,122,.12); }
+  .nodes button .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--like); }
+  .nodes button.offline { opacity: .5; }
+  .nodes button.offline .dot { background: var(--muted); }
+  #remoteSessions { display: flex; flex-direction: column; gap: 6px; }
+  #remoteSessions a { display: flex; gap: 10px; align-items: center; justify-content: space-between; color: var(--text); text-decoration: none; border: 1px solid #fd4d5d; border-radius: 10px; padding: 10px 14px; background: rgba(253,38,122,.08); font-size: 14px; }
+
   /* explorador de carpetas */
   #brPath { flex: 1; min-width: 0; }
   #brList { overflow-y: auto; min-height: 160px; border: 1px solid var(--line); border-radius: 12px; padding: 6px; }
@@ -422,6 +432,7 @@
         </div>
         <button id="btnShare2" title="Abrir desde el celular">📱 Compartir</button>
       </div>
+      <div id="remoteSessions" class="full hidden"></div>
       <div class="col">
         <h4>Carpetas</h4>
         <div class="step" id="stepSrc">
@@ -432,7 +443,7 @@
           <div class="num">2</div>
           <button id="pickDst">Carpeta destino de los matches…</button>
         </div>
-        <p style="font-size:13px">Se incluyen las fotos de todas las subcarpetas. Para una carpeta compartida en red, escribí la ruta, por ejemplo <b>\\192.168.100.2\Imagenes</b>.</p>
+        <p style="font-size:13px">Podés elegir carpetas de cualquier PC de la red que tenga Kyro abierto. Se incluyen las fotos de todas las subcarpetas.</p>
         <label class="opt"><input type="checkbox" id="groupRaw" checked><div>Agrupar RAW + JPG<small>Si una foto está en los dos formatos, aparece una sola vez y se procesan juntas.</small></div></label>
         <label class="opt"><input type="checkbox" id="keepTree"><div>Mantener las subcarpetas en el destino<small>Si no, todos los matches van juntos a la misma carpeta.</small></div></label>
       </div>
@@ -461,6 +472,7 @@
 <div id="browser" class="modal hidden">
   <div class="box">
     <h2 id="brTitle">Elegir carpeta</h2>
+    <div id="brNodes" class="nodes"></div>
     <div class="row">
       <input id="brPath" placeholder="Pegá una ruta: C:\Fotos o \\192.168.100.2\Imagenes" spellcheck="false">
       <button id="brGo">Ir</button>
@@ -526,7 +538,8 @@ let busy = false;
 let tab = 'like';
 let setupReturn = false; // la pantalla de inicio se abrió desde "Carpetas" con una sesión en curso
 let seenErrors = -1;
-const pick = { src: '', dst: '' };
+const pick = { src: null, dst: null }; // { node, nodeName, path }
+let nodes = [];                         // PCs con Kyro en la red (la primera es esta)
 
 // ================= Comunicación con el servidor =================
 
@@ -564,7 +577,7 @@ function applyState(st) {
   else if (st.preset !== lastPreset) {
     // se eligió una carpeta con clic derecho → "Elegir fotos con Kyro"
     lastPreset = st.preset;
-    showSetup({ src: st.preset }, st.active);
+    showSetup({ src: { node: st.self.id, nodeName: st.self.name, path: st.preset } }, st.active);
     toast('Carpeta elegida desde Windows: ' + st.preset);
   }
   if (!st.active) {
@@ -605,16 +618,29 @@ function showSetup(cfg, keepSession = false) {
   setupReturn = keepSession;
   $('backToSwipe').classList.toggle('hidden', !keepSession);
   $('setup').classList.remove('hidden');
+  refreshNodes();
 }
 
-function setPick(which, p) {
-  pick[which] = p;
+const isSelf = (nodeId) => !nodeId || nodeId === S?.self?.id;
+const locText = (loc) => (isSelf(loc.node) ? loc.path : `${loc.nodeName || 'otra PC'}: ${loc.path}`);
+
+function setPick(which, loc) {
+  pick[which] = loc?.path ? loc : null;
   const step = which === 'src' ? 'stepSrc' : 'stepDst';
   const btn = which === 'src' ? 'pickSrc' : 'pickDst';
-  $(step).classList.toggle('done', !!p);
-  $(btn).textContent = p || (which === 'src' ? 'Carpeta con las fotos…' : 'Carpeta destino de los matches…');
-  $(btn).title = p;
+  $(step).classList.toggle('done', !!pick[which]);
+  $(btn).textContent = pick[which] ? locText(pick[which]) : (which === 'src' ? 'Carpeta con las fotos…' : 'Carpeta destino de los matches…');
+  $(btn).title = pick[which] ? locText(pick[which]) : '';
   $('start').disabled = !(pick.src && pick.dst);
+}
+
+// PCs con Kyro en la red; si alguna tiene una sesión en marcha, se ofrece ir ahí
+async function refreshNodes() {
+  try { nodes = await api('nodes'); } catch { return; }
+  const busyPeers = nodes.filter((n) => !n.self && n.online && n.active);
+  $('remoteSessions').classList.toggle('hidden', !busyPeers.length);
+  $('remoteSessions').innerHTML = busyPeers.map((n) => `
+    <a href="${escapeHtml(n.url)}"><span>Hay una sesión en marcha en <b>${escapeHtml(n.name)}</b>${n.src ? ' · ' + escapeHtml(n.src) : ''}</span><b>Ir →</b></a>`).join('');
 }
 
 $('pickSrc').onclick = () => openBrowser('src');
@@ -638,6 +664,12 @@ $('start').onclick = async () => {
       groupRaw: $('groupRaw').checked, keepTree: $('keepTree').checked,
       sortBy: $('sortBy').value, sortDir: $('sortDir').value,
     });
+    if (st.redirect) {
+      // las fotos están en otra PC: la sesión corre allá y la interfaz se muda a esa dirección
+      toast('Abriendo en ' + (pick.src.nodeName || 'la otra PC') + '…');
+      location.href = st.redirect;
+      return;
+    }
     setupReturn = false;
     shownId = null;
     seenErrors = -1;
@@ -650,24 +682,56 @@ $('start').onclick = async () => {
 };
 
 // ================= Explorador de carpetas =================
-// Muestra las carpetas de la PC donde corre Kyro (también desde el celular).
+// Muestra las carpetas de cualquier PC de la red que tenga Kyro abierto.
 
 let brTarget = 'src';
 let brCurrent = '';
+let brNode = null; // { id, name }
 
-function openBrowser(which) {
+async function openBrowser(which) {
   brTarget = which;
   $('brTitle').textContent = which === 'src' ? 'Carpeta con las fotos' : 'Carpeta destino de los matches';
-  $('brNew').classList.toggle('hidden', false);
   $('browser').classList.remove('hidden');
-  browse(pick[which] || '');
+  await refreshNodes();
+  const prev = pick[which];
+  const node = nodes.find((n) => n.id === prev?.node) || nodes[0];
+  selectNode(node, prev?.node === node?.id ? prev.path : '');
+}
+
+function renderNodes() {
+  $('brNodes').innerHTML = nodes.map((n) => `
+    <button data-id="${n.id}" class="${n.id === brNode?.id ? 'active' : ''} ${n.online ? '' : 'offline'}" title="${n.online ? '' : 'Sin conexión: abrí Kyro en esa PC'}">
+      <span class="dot"></span>${n.self ? 'Esta PC · ' : ''}${escapeHtml(n.name)}</button>`).join('')
+    + '<button id="brAddPeer" title="Si otra PC con Kyro no aparece sola">+ Agregar PC</button>';
+  $('brNodes').querySelectorAll('button[data-id]').forEach((b) => {
+    b.onclick = () => selectNode(nodes.find((n) => n.id === b.dataset.id), '');
+  });
+  $('brAddPeer').onclick = addPeer;
+}
+
+function selectNode(node, p) {
+  if (!node) return;
+  brNode = node;
+  renderNodes();
+  browse(p);
+}
+
+async function addPeer() {
+  const ip = prompt('IP de la otra PC con Kyro abierto (la ves en su botón Compartir), por ejemplo 192.168.100.2:');
+  if (!ip) return;
+  try {
+    nodes = await api('add-peer', { ip });
+    const added = nodes.find((n) => n.url?.includes('//' + ip.trim().replace(/[:/].*$/, '') + ':'));
+    toast('PC agregada' + (added ? ': ' + added.name : ''));
+    selectNode(added || brNode, '');
+  } catch (e) { toast(e.message); }
 }
 
 async function browse(p) {
   $('brList').innerHTML = '<div class="note">Cargando…</div>';
   let d;
   try {
-    d = await api('browse?path=' + encodeURIComponent(p));
+    d = await api(`browse?node=${encodeURIComponent(brNode?.id || '')}&path=${encodeURIComponent(p)}`);
   } catch (e) {
     $('brList').innerHTML = `<div class="note warn">${escapeHtml(e.message)}</div>`;
     return;
@@ -686,7 +750,7 @@ async function browse(p) {
     if (d.recent?.length) html += '<div class="group">Usadas hace poco</div>' + d.recent.map((x) => item(x)).join('');
     html += '<div class="group">Lugares</div>' + d.places.map((x) => item(x)).join('');
     html += '<div class="group">Discos</div>' + d.roots.map((x) => item(x, ICON.drive)).join('');
-    html += '<div class="note">Para una carpeta de otra PC, escribí arriba \\\\IP-o-nombre\\carpeta y tocá Ir.</div>';
+    html += '<div class="note">Las carpetas de otra PC se eligen con los botones de arriba (tiene que tener Kyro abierto). También podés escribir una ruta de red como \\\\IP\\carpeta y tocar Ir.</div>';
   } else {
     html = d.dirs.map((x) => item(x)).join('') || `<div class="note">${escapeHtml(d.note || 'No hay subcarpetas.')}</div>`;
   }
@@ -700,14 +764,14 @@ $('brUp').onclick = () => browse($('brList').dataset.parent || '');
 $('brCancel').onclick = () => $('browser').classList.add('hidden');
 $('brPick').onclick = () => {
   if (!brCurrent) return;
-  setPick(brTarget, brCurrent);
+  setPick(brTarget, { node: brNode.id, nodeName: brNode.name, path: brCurrent });
   $('browser').classList.add('hidden');
 };
 $('brNew').onclick = async () => {
   const name = prompt('Nombre de la carpeta nueva:');
   if (!name) return;
   try {
-    const r = await api('mkdir', { path: brCurrent, name });
+    const r = await api('mkdir', { node: brNode?.id, path: brCurrent, name });
     browse(r.path);
   } catch (e) { toast(e.message); }
 };

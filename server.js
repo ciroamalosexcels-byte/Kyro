@@ -6,6 +6,8 @@
 process.env.UV_THREADPOOL_SIZE ??= '16'; // más lecturas en paralelo: por red cada una espera mucho
 
 const http = require('http');
+const dgram = require('dgram');
+const crypto = require('crypto');
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
@@ -14,7 +16,7 @@ const { exec, execFile } = require('child_process');
 const media = require('./lib/media');
 
 const PORT = Number(process.env.KYRO_PORT) || 8420;
-const CONFIG_FILE = path.join(__dirname, 'kyro-config.json');
+const CONFIG_FILE = process.env.KYRO_CONFIG || path.join(__dirname, 'kyro-config.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const UNDOABLE_DELETES = 10;
 const SKIP_DIRS = new Set(['$RECYCLE.BIN', 'System Volume Information']);
@@ -22,8 +24,13 @@ const collator = new Intl.Collator('es', { numeric: true, sensitivity: 'base' })
 
 // ================= Configuración (última selección) =================
 
-let config = { src: '', dst: '', opts: {}, recent: [], preset: '' };
+let config = { src: null, dst: null, opts: {}, recent: [], preset: '', nodeId: '', manualPeers: [] };
 try { config = { ...config, ...JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) }; } catch { /* primera vez */ }
+if (!config.nodeId) {
+  config.nodeId = crypto.randomUUID().slice(0, 8);
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+}
+const SELF = { id: config.nodeId, name: os.hostname() };
 
 function saveConfig() {
   fsp.writeFile(CONFIG_FILE, JSON.stringify(config, null, 2)).catch(() => {});
@@ -31,6 +38,156 @@ function saveConfig() {
 
 function remember(dir) {
   config.recent = [dir, ...config.recent.filter((d) => d !== dir)].slice(0, 8);
+}
+
+// ================= Red de Kyros =================
+// Cada PC con Kyro se anuncia por la red local; así se pueden elegir carpetas de cualquiera de ellas.
+
+const DISCOVERY_PORT = PORT + 1;
+const PEER_TIMEOUT = 20000;
+const peers = new Map(); // id -> { id, name, url, lastSeen, active, src }
+
+const isOnline = (p) => Date.now() - p.lastSeen < PEER_TIMEOUT;
+
+function helloJson() {
+  return { kyro: 1, id: SELF.id, name: SELF.name, port: PORT, active: !!session, src: session ? session.src : '' };
+}
+
+function registerPeer(info, address) {
+  if (!info?.id || info.id === SELF.id || !address) return;
+  address = address.replace(/^::ffff:/, '');
+  peers.set(info.id, {
+    id: info.id, name: info.name || address, url: `http://${address}:${info.port || PORT}`,
+    lastSeen: Date.now(), active: !!info.active, src: info.src || '',
+  });
+}
+
+function peerOf(nodeId) {
+  if (!nodeId || nodeId === SELF.id) return null;
+  const p = peers.get(nodeId);
+  if (!p || !isOnline(p)) throw new HttpError(503, `El equipo ${p?.name || ''} no está conectado. ¿Está abierto Kyro ahí?`);
+  return p;
+}
+
+function nodesJson() {
+  return [
+    { id: SELF.id, name: SELF.name, self: true, online: true, active: !!session },
+    ...[...peers.values()].map((p) => ({ id: p.id, name: p.name, url: p.url, online: isOnline(p), active: p.active, src: p.src })),
+  ];
+}
+
+function broadcastAddrs() {
+  const out = new Set(['255.255.255.255']);
+  const toInt = (ip) => ip.split('.').reduce((n, o) => n * 256 + Number(o), 0);
+  for (const addrs of Object.values(os.networkInterfaces())) {
+    for (const a of addrs || []) {
+      if (a.family !== 'IPv4' || a.internal) continue;
+      const b = (toInt(a.address) | (~toInt(a.netmask) >>> 0)) >>> 0;
+      out.add([b >>> 24, (b >>> 16) & 255, (b >>> 8) & 255, b & 255].join('.'));
+    }
+  }
+  return [...out];
+}
+
+const udp = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+udp.on('message', (msg, rinfo) => {
+  try { const info = JSON.parse(msg); if (info.kyro === 1) registerPeer(info, rinfo.address); } catch { /* no es de Kyro */ }
+});
+udp.on('error', () => { /* sin descubrimiento automático: quedan los equipos agregados a mano */ });
+
+function announce() {
+  const msg = Buffer.from(JSON.stringify(helloJson()));
+  for (const b of broadcastAddrs()) udp.send(msg, DISCOVERY_PORT, b, () => {});
+}
+
+// Además del anuncio por la red, se saluda por HTTP a los equipos conocidos (y a los agregados por IP)
+async function probe(url) {
+  const res = await fetch(url + '/peer/hello', {
+    headers: { 'X-Kyro-From': JSON.stringify(helloJson()) }, signal: AbortSignal.timeout(4000),
+  });
+  const info = await res.json();
+  if (info.kyro === 1) registerPeer(info, new URL(url).hostname);
+  return info;
+}
+
+function probeAll() {
+  const urls = new Set([...peers.values()].map((p) => p.url));
+  for (const host of config.manualPeers) urls.add(`http://${host.includes(':') ? host : `${host}:${PORT}`}`);
+  for (const u of urls) probe(u).catch(() => {});
+}
+
+async function proxyJson(p, method, pathQ, body) {
+  let res;
+  try {
+    res = await fetch(p.url + pathQ, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(90000),
+    });
+  } catch {
+    throw new HttpError(503, `No se pudo conectar con ${p.name}. ¿Está abierto Kyro ahí?`);
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new HttpError(res.status, data.error || `Error en ${p.name}`);
+  return data;
+}
+
+// Manda un archivo a la carpeta `dir` de otro Kyro; devuelve el nombre con que quedó guardado
+async function pushToPeer(p, dir, localFile, name) {
+  const st = await fsp.stat(localFile);
+  const u = new URL(p.url + '/peer/file');
+  u.searchParams.set('dir', dir);
+  u.searchParams.set('name', name);
+  return new Promise((resolve, reject) => {
+    const req = http.request(u, { method: 'PUT', headers: { 'Content-Length': st.size, 'X-Mtime': String(st.mtimeMs) } }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        let data = {};
+        try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { /* respuesta vacía */ }
+        if (res.statusCode === 200) resolve(data.name);
+        else reject(new Error(data.error || `${p.name} respondió ${res.statusCode}`));
+      });
+    });
+    req.on('error', () => reject(new Error(`se cortó la conexión con ${p.name}`)));
+    fs.createReadStream(localFile).on('error', reject).pipe(req);
+  });
+}
+
+// Trae un archivo de otro Kyro (para deshacer un "mover")
+function pullFromPeer(p, remotePath, localPath) {
+  const u = new URL(p.url + '/peer/file');
+  u.searchParams.set('path', remotePath);
+  return new Promise((resolve, reject) => {
+    http.get(u, (res) => {
+      if (res.statusCode !== 200) { res.resume(); return reject(new Error(`${p.name} respondió ${res.statusCode}`)); }
+      const out = fs.createWriteStream(localPath, { flags: 'wx' });
+      res.pipe(out);
+      out.on('finish', resolve);
+      out.on('error', reject);
+    }).on('error', () => reject(new Error(`se cortó la conexión con ${p.name}`)));
+  });
+}
+
+async function peerDelete(p, remotePath) {
+  const u = new URL(p.url + '/peer/file');
+  u.searchParams.set('path', remotePath);
+  const res = await fetch(u, { method: 'DELETE', signal: AbortSignal.timeout(30000) });
+  if (!res.ok && res.status !== 404) throw new Error(`${p.name} no pudo borrar la copia`);
+}
+
+// Una ubicación es { node, path }; las rutas sueltas (versiones anteriores) son de esta PC
+function normLoc(x) {
+  if (!x) return null;
+  if (typeof x === 'string') return x ? { node: SELF.id, path: x } : null;
+  return x.path ? { node: x.node || SELF.id, path: String(x.path) } : null;
+}
+
+function locLabel(loc) {
+  if (!loc) return '';
+  if (loc.node === SELF.id) return loc.path;
+  return `${peers.get(loc.node)?.name || loc.nodeName || 'otro equipo'}: ${loc.path}`;
 }
 
 // ================= Sesión =================
@@ -47,9 +204,12 @@ const splitName = (name) => {
   return dot > 0 ? { base: name.slice(0, dot), ext: name.slice(dot + 1) } : { base: name, ext: '' };
 };
 
-function newSession(opts) {
+function newSession(opts, src, dst) {
   return {
-    src: opts.src, dst: opts.dst,
+    src: src.path, dst: dst.path,
+    // destino en otra PC: los matches se le mandan a su Kyro
+    dstPeer: dst.node === SELF.id ? null : { id: dst.node, name: peers.get(dst.node)?.name || 'otro equipo' },
+    srcLabel: locLabel(src), dstLabel: locLabel(dst),
     opts: {
       likeOp: ['copy', 'move'].includes(opts.likeOp) ? opts.likeOp : 'copy',
       nopeOp: ['keep', 'discard', 'delete'].includes(opts.nopeOp) ? opts.nopeOp : 'keep',
@@ -148,7 +308,7 @@ async function walk(s, dirAbs, rel) {
         if (de.name.startsWith('.') || de.name.startsWith('$') || SKIP_DIRS.has(de.name)) continue;
         if (!rel && de.name === 'Descartadas') continue;
         const abs = path.join(dirAbs, de.name);
-        if (path.resolve(abs).toLowerCase() === path.resolve(s.dst).toLowerCase()) continue;
+        if (!s.dstPeer && path.resolve(abs).toLowerCase() === path.resolve(s.dst).toLowerCase()) continue;
         subdirs.push(de.name);
         continue;
       }
@@ -253,10 +413,11 @@ async function moveFile(from, to) {
   }
 }
 
-async function targetDir(s, op, entry) {
+// Carpeta de llegada; si el destino está en otra PC, la crea su Kyro al recibir el archivo
+async function targetDir(s, op, entry, remote) {
   let dir = op === 'discard' ? path.join(s.src, 'Descartadas') : s.dst;
   if (s.opts.keepTree && entry.folder) dir = path.join(dir, ...entry.folder.split('/'));
-  await fsp.mkdir(dir, { recursive: true });
+  if (!remote) await fsp.mkdir(dir, { recursive: true });
   return dir;
 }
 
@@ -264,12 +425,17 @@ async function applyOp(s, step) {
   const entry = s.byId.get(step.id);
   const { op } = step;
   if (op === 'keep') return;
-  const target = op === 'delete' ? null : await targetDir(s, op, entry);
+  const remote = (op === 'copy' || op === 'move') && s.dstPeer;
+  const target = op === 'delete' ? null : await targetDir(s, op, entry, remote);
   try {
     for (const part of partsOf(entry)) {
       const from = path.join(part.dir, part.name);
       const r = { part, dir: target };
-      if (op === 'copy') {
+      if (remote) {
+        r.remote = true;
+        r.name = await pushToPeer(peerOf(s.dstPeer.id), target, from, part.name);
+        if (op === 'move') await fsp.unlink(from);
+      } else if (op === 'copy') {
         r.name = await freeName(target, part.name);
         await fsp.copyFile(from, path.join(target, r.name), fs.constants.COPYFILE_EXCL);
       } else if (op === 'move' || op === 'discard') {
@@ -291,7 +457,16 @@ async function applyOp(s, step) {
 async function revertOp(s, step) {
   const entry = s.byId.get(step.id);
   for (const r of [...step.parts].reverse()) {
-    if (step.op === 'copy') {
+    if (r.remote) {
+      const p = peerOf(s.dstPeer.id);
+      const full = path.join(r.dir, r.name);
+      if (step.op === 'move') {
+        const name = await freeName(r.part.dir, r.part.name);
+        await pullFromPeer(p, full, path.join(r.part.dir, name));
+        r.part.name = name;
+      }
+      await peerDelete(p, full);
+    } else if (step.op === 'copy') {
       await fsp.unlink(path.join(r.dir, r.name)).catch(() => {});
     } else if (step.op === 'move' || step.op === 'discard') {
       const name = await freeName(r.part.dir, r.part.name);
@@ -349,12 +524,12 @@ function publicEntry(e) {
 
 function stateJson() {
   if (!session) {
-    return { version, active: false, config: publicConfig(), preset: config.preset || '' };
+    return { version, active: false, self: SELF, config: publicConfig(), preset: config.preset || '' };
   }
   const s = session;
   return {
-    version, active: true,
-    src: s.src, dst: s.dst, opts: s.opts,
+    version, active: true, self: SELF,
+    src: s.srcLabel, dst: s.dstLabel, opts: s.opts,
     index: s.index, total: s.files.length, likes: s.likes, nopes: s.nopes,
     window: s.files.slice(s.index, s.index + 3).map(publicEntry),
     history: s.history.filter((h) => !h.skip).slice(-150).map((h) => ({ id: h.id, action: h.action, name: h.name })),
@@ -367,7 +542,12 @@ function stateJson() {
 }
 
 function publicConfig() {
-  return { src: config.preset || config.src, dst: config.dst, opts: config.opts, recent: config.recent };
+  const withName = (loc) => loc && { ...loc, nodeName: loc.node === SELF.id ? SELF.name : (peers.get(loc.node)?.name || loc.nodeName) };
+  return {
+    src: withName(normLoc(config.preset || config.src)),
+    dst: withName(normLoc(config.dst)),
+    opts: config.opts, recent: config.recent,
+  };
 }
 
 function lanUrls() {
@@ -519,8 +699,25 @@ const routes = {
   'GET /api/state': () => stateJson(),
   'GET /api/info': () => ({ urls: lanUrls(), port: PORT, host: os.hostname() }),
   'GET /api/config': () => publicConfig(),
+  'GET /api/nodes': () => nodesJson(),
+
+  'POST /api/add-peer': async (q, body) => {
+    // "192.168.100.2" o "192.168.100.2:8420"
+    const host = String(body.ip || '').trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    if (!host) throw new HttpError(400, 'Escribí la IP de la otra PC');
+    try {
+      await probe(`http://${host.includes(':') ? host : `${host}:${PORT}`}`);
+    } catch {
+      throw new HttpError(503, `No hay un Kyro abierto en ${host}. Abrilo en esa PC y probá de nuevo.`);
+    }
+    config.manualPeers = [...new Set([...config.manualPeers, host])];
+    saveConfig();
+    return nodesJson();
+  },
 
   'GET /api/browse': async (q) => {
+    const p = peerOf(q.get('node'));
+    if (p) return proxyJson(p, 'GET', '/api/browse?path=' + encodeURIComponent(q.get('path') || ''));
     try {
       return await browse(q.get('path') || '');
     } catch (e) {
@@ -529,6 +726,8 @@ const routes = {
   },
 
   'POST /api/mkdir': async (q, body) => {
+    const peer = peerOf(body.node);
+    if (peer) return proxyJson(peer, 'POST', '/api/mkdir', { path: body.path, name: body.name });
     const name = String(body.name || '').trim();
     if (!name || /[<>:"/\\|?*]/.test(name)) throw new HttpError(400, 'Nombre de carpeta inválido');
     const p = path.join(body.path, name);
@@ -537,23 +736,38 @@ const routes = {
   },
 
   'POST /api/start': async (q, body) => {
-    if (session?.queue.length) throw new HttpError(409, 'Esperá a que terminen de procesarse las fotos pendientes');
-    const src = String(body.src || ''), dst = String(body.dst || '');
-    const st = await fsp.stat(src).catch(() => null);
-    if (!st?.isDirectory()) throw new HttpError(400, 'La carpeta de origen no existe');
+    const src = normLoc(body.src), dst = normLoc(body.dst);
+    if (!src) throw new HttpError(400, 'Elegí la carpeta con las fotos');
     if (!dst) throw new HttpError(400, 'Elegí una carpeta destino');
-    if (path.resolve(src).toLowerCase() === path.resolve(dst).toLowerCase()) throw new HttpError(400, 'Origen y destino no pueden ser la misma carpeta');
-    await fsp.mkdir(dst, { recursive: true });
+
+    // Las fotos están en otra PC: la sesión corre en su Kyro (lee del disco local) y la interfaz se muda ahí
+    const srcPeer = peerOf(src.node);
+    if (srcPeer) {
+      await probe(srcPeer.url).catch(() => {}); // que esa PC nos conozca, por si el destino es esta
+      const st = await proxyJson(srcPeer, 'POST', '/api/start', { ...body, src, dst });
+      return { ...st, redirect: srcPeer.url };
+    }
+
+    if (session?.queue.length) throw new HttpError(409, 'Esperá a que terminen de procesarse las fotos pendientes');
+    const st = await fsp.stat(src.path).catch(() => null);
+    if (!st?.isDirectory()) throw new HttpError(400, 'La carpeta de origen no existe');
+    const dstPeer = peerOf(dst.node);
+    if (dstPeer) {
+      await proxyJson(dstPeer, 'POST', '/peer/ensure-dir', { path: dst.path });
+    } else {
+      if (path.resolve(src.path).toLowerCase() === path.resolve(dst.path).toLowerCase()) throw new HttpError(400, 'Origen y destino no pueden ser la misma carpeta');
+      await fsp.mkdir(dst.path, { recursive: true });
+    }
     if (session) session.scan.cancel = true;
     previewCache.clear();
 
-    session = newSession(body);
+    session = newSession(body, src, dst);
     config.src = src;
-    config.dst = dst;
+    config.dst = { ...dst, nodeName: dstPeer?.name };
     config.preset = '';
     config.opts = session.opts;
-    remember(src);
-    remember(dst);
+    remember(src.path);
+    if (!dstPeer) remember(dst.path);
     saveConfig();
     bump();
     runScan(session).catch((e) => session?.errors.push({ name: 'búsqueda', message: e.message }));
@@ -665,7 +879,47 @@ const routes = {
   },
 
   'GET /api/meta': async (q) => getMeta(entryById(q.get('id'))),
+
+  'POST /peer/ensure-dir': async (q, body) => {
+    await fsp.mkdir(String(body.path), { recursive: true });
+    return { ok: true };
+  },
 };
+
+// ---------- Archivos pedidos por otro Kyro (destino en esta PC) ----------
+
+async function handlePeerFile(req, res, q) {
+  if (req.method === 'PUT') {
+    const dir = q.get('dir'), name = path.basename(q.get('name') || '');
+    if (!dir || !name) return sendJson(res, 400, { error: 'Faltan datos' });
+    await fsp.mkdir(dir, { recursive: true });
+    const finalName = await freeName(dir, name);
+    const full = path.join(dir, finalName);
+    const out = fs.createWriteStream(full, { flags: 'wx' });
+    req.pipe(out);
+    out.on('finish', async () => {
+      const mtime = Number(req.headers['x-mtime']);
+      if (mtime) await fsp.utimes(full, new Date(), new Date(mtime)).catch(() => {}); // conserva la fecha original
+      sendJson(res, 200, { name: finalName });
+    });
+    out.on('error', (e) => sendJson(res, 500, { error: 'no se pudo guardar: ' + (e.code || e.message) }));
+    req.on('aborted', () => { out.destroy(); fsp.unlink(full).catch(() => {}); });
+    return;
+  }
+  const file = q.get('path');
+  if (!file) return sendJson(res, 400, { error: 'Falta la ruta' });
+  if (req.method === 'GET') {
+    const st = await fsp.stat(file).catch(() => null);
+    if (!st) return sendJson(res, 404, { error: 'No existe' });
+    res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': st.size });
+    return fs.createReadStream(file).pipe(res);
+  }
+  if (req.method === 'DELETE') {
+    await fsp.unlink(file).catch((e) => { if (e.code !== 'ENOENT') throw e; });
+    return sendJson(res, 200, { ok: true });
+  }
+  sendJson(res, 405, { error: 'Método no permitido' });
+}
 
 async function handle(req, res) {
   const url = new URL(req.url, 'http://x');
@@ -674,6 +928,15 @@ async function handle(req, res) {
   if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
     return fs.createReadStream(path.join(PUBLIC_DIR, 'index.html')).pipe(res);
+  }
+
+  if (url.pathname === '/peer/hello') {
+    try { registerPeer(JSON.parse(req.headers['x-kyro-from'] || 'null'), req.socket.remoteAddress); } catch { /* saludo sin datos */ }
+    return sendJson(res, 200, helloJson());
+  }
+
+  if (url.pathname === '/peer/file') {
+    try { return await handlePeerFile(req, res, q); } catch (e) { return sendJson(res, 500, { error: e.code || e.message }); }
   }
 
   const photo = url.pathname.match(/^\/api\/photo\/(\d+)$/);
@@ -737,6 +1000,13 @@ server.on('error', (e) => {
 
 server.listen(PORT, '0.0.0.0', () => {
   if (presetArg) { config.preset = presetArg; }
+  udp.bind(DISCOVERY_PORT, () => {
+    udp.setBroadcast(true);
+    announce();
+    setInterval(announce, 5000);
+  });
+  probeAll();
+  setInterval(probeAll, 5000);
   console.log('\n  Kyro Photo Selector está funcionando.\n');
   console.log(`  En esta PC:     http://localhost:${PORT}`);
   for (const u of lanUrls().filter((x) => !x.virtual)) console.log(`  Desde la red:   ${u.url}   (${u.name})`);
