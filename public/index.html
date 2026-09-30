@@ -1,0 +1,1447 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d0f12">
+<title>Kyro Photo Selector</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23ee2e6e'/%3E%3Ccircle cx='42' cy='21' r='6' fill='%23fff'/%3E%3Cpath fill='%23fff' stroke='%23fff' stroke-width='3' stroke-linejoin='round' d='M11 49 L25 29 L34 41 L40 34 L53 49 Z'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #0d0f12;
+    --side: #14171c;
+    --panel: #1a1e24;
+    --line: #262b33;
+    --text: #f4f5f7;
+    --muted: #8e97a4;
+    --brand: linear-gradient(45deg, #fd267a, #ff6036);
+    --nope: #ff4458;
+    --like: #1ee3a0;
+    --rewind: #f7b733;
+    --zoom: #1ea1f1;
+    --info: #a44cf0;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", system-ui, sans-serif;
+    overflow: hidden;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button, select, input {
+    font: inherit; color: var(--text);
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 7px 12px;
+  }
+  button, select { cursor: pointer; }
+  button:hover, select:hover { border-color: #46505e; }
+  button.primary, a.primary { background: var(--brand); border: none; font-weight: 700; color: #fff; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  a.button { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; border-radius: 10px; padding: 7px 12px; }
+  .hidden { display: none !important; }
+  .warn { color: #ffb347; }
+
+  /* ---------- Layout principal ---------- */
+  #app {
+    display: grid;
+    grid-template-columns: 300px 1fr 360px;
+    height: 100vh; height: 100dvh;
+  }
+  body.no-info #app { grid-template-columns: 300px 1fr 0; }
+  body.no-info #info { display: none; }
+
+  /* ---------- Barra lateral ---------- */
+  #side {
+    background: var(--side);
+    border-right: 1px solid var(--line);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .side-top {
+    background: var(--brand);
+    padding: 14px 16px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .side-top .logo { font-size: 24px; font-weight: 800; margin-right: auto; letter-spacing: -.5px; }
+  .side-top button { background: rgba(0,0,0,.22); border: none; padding: 6px 10px; font-size: 13px; }
+  .side-block { padding: 14px 16px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+  .side-block .k { color: var(--muted); }
+  .side-block .v { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+  .kv { display: grid; grid-template-columns: 70px 1fr; gap: 4px 8px; }
+  .sort-row { display: flex; gap: 6px; }
+  .sort-row select { flex: 1; font-size: 13px; padding: 6px 8px; }
+  .progress { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+  .progress > div { height: 100%; background: var(--brand); width: 0; transition: width .2s; }
+  .counts { display: flex; justify-content: space-between; color: var(--muted); }
+  .counts b { color: var(--text); }
+  #status { color: var(--muted); display: flex; flex-direction: column; gap: 6px; }
+  #status:empty { display: none; }
+  #status button { font-size: 12px; padding: 5px 10px; align-self: flex-start; }
+  .tabs { display: flex; padding: 0 16px; gap: 18px; border-bottom: 1px solid var(--line); }
+  .tabs button {
+    background: none; border: none; border-radius: 0; padding: 12px 0;
+    font-weight: 700; color: var(--muted); border-bottom: 3px solid transparent;
+  }
+  .tabs button.active { color: var(--text); border-image: var(--brand) 1; border-bottom: 3px solid; }
+  #thumbs {
+    flex: 1; overflow-y: auto; padding: 12px 16px;
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; align-content: start;
+  }
+  #thumbs .thumb { aspect-ratio: 3/4; border-radius: 8px; overflow: hidden; background: #000; position: relative; }
+  #thumbs .thumb img { width: 100%; height: 100%; object-fit: cover; }
+  #thumbs .thumb span {
+    position: absolute; left: 0; right: 0; bottom: 0; padding: 12px 5px 4px;
+    font-size: 10px; background: linear-gradient(transparent, rgba(0,0,0,.8));
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #thumbs .none { grid-column: 1 / -1; color: var(--muted); font-size: 13px; text-align: center; padding: 30px 0; }
+
+  /* ---------- Centro: foto ---------- */
+  #center { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  #toolbar {
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 10px; font-size: 13px; flex-wrap: wrap;
+  }
+  #toolbar button { padding: 5px 10px; font-size: 13px; }
+  #btnMenu { display: none; }
+  #zoomLabel { min-width: 56px; text-align: center; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #deck { position: relative; flex: 1; min-height: 0; margin: 0 20px; }
+
+  .card {
+    position: absolute; inset: 0; margin: auto;
+    border-radius: var(--radius); overflow: hidden;
+    background: #000;
+    box-shadow: 0 8px 36px rgba(0,0,0,.6);
+    touch-action: none; cursor: grab;
+    transform-origin: 50% 110%;
+  }
+  .card.zoomed { cursor: move; }
+  .card.behind { transform: scale(.94); filter: brightness(.45); cursor: default; }
+  .card img {
+    position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+    transform-origin: 0 0; pointer-events: none;
+  }
+  .card .error {
+    position: absolute; inset: 0; display: grid; place-items: center; text-align: center;
+    padding: 30px; color: var(--muted); background: #111;
+  }
+  .card .error b { display: block; color: var(--text); font-size: 18px; margin-bottom: 6px; }
+  .card .overlay {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    padding: 70px 22px 18px;
+    background: linear-gradient(transparent, rgba(0,0,0,.35) 30%, rgba(0,0,0,.85));
+    display: flex; align-items: flex-end; gap: 12px;
+    transition: opacity .15s;
+  }
+  .card.zoomed .overlay, body.clean .card .overlay { opacity: 0; pointer-events: none; }
+  .overlay .who { flex: 1; min-width: 0; }
+  .overlay .name { font-size: 30px; font-weight: 800; line-height: 1.1; word-break: break-all; }
+  .overlay .name small { font-size: 20px; font-weight: 400; opacity: .85; margin-left: 6px; }
+  .overlay .line { font-size: 15px; margin-top: 6px; opacity: .92; display: flex; gap: 7px; align-items: center; }
+  .overlay .line svg { width: 16px; height: 16px; flex: none; }
+  .overlay .info-btn {
+    width: 34px; height: 34px; border-radius: 50%; padding: 0; flex: none;
+    background: #fff; color: #111; border: none; font-weight: 800; font-family: Georgia, serif;
+  }
+  .stamp {
+    position: absolute; top: 40px;
+    font-size: 48px; font-weight: 900; letter-spacing: 3px;
+    padding: 2px 14px; border: 6px solid; border-radius: 12px;
+    opacity: 0; pointer-events: none;
+  }
+  .stamp.like { left: 30px; color: var(--like); transform: rotate(-16deg); }
+  .stamp.nope { right: 30px; color: var(--nope); transform: rotate(16deg); }
+
+  .empty {
+    position: absolute; inset: 0; display: grid; place-items: center; text-align: center;
+    color: var(--muted); padding: 20px;
+  }
+  .empty h2 { color: var(--text); font-size: 28px; margin: 0 0 10px; }
+  .empty p { margin: 0 0 18px; }
+
+  #actions { display: flex; justify-content: center; align-items: center; gap: 18px; padding: 16px 0 8px; }
+  .round {
+    border-radius: 50%; padding: 0; display: grid; place-items: center;
+    background: #1f242b; border: 1px solid #2d333c;
+    transition: transform .12s, background .12s;
+  }
+  .round:hover { transform: scale(1.1); }
+  .round.big { width: 68px; height: 68px; }
+  .round.small { width: 50px; height: 50px; }
+  .round svg { width: 50%; height: 50%; }
+  .round.nope { color: var(--nope); }
+  .round.like { color: var(--like); }
+  .round.rewind { color: var(--rewind); }
+  .round.zoom { color: var(--zoom); }
+  .round.info { color: var(--info); }
+  .round.nope:hover { background: rgba(255,68,88,.14); }
+  .round.like:hover { background: rgba(30,227,160,.14); }
+
+  #shortcuts {
+    display: flex; justify-content: center; flex-wrap: wrap; gap: 6px 18px;
+    padding: 8px 12px 14px; font-size: 11px; color: var(--muted); letter-spacing: .5px;
+  }
+  kbd {
+    display: inline-block; min-width: 20px; padding: 1px 6px; margin-right: 4px;
+    border: 1px solid #3a414c; border-bottom-width: 2px; border-radius: 4px;
+    font: 11px/1.4 "Segoe UI", sans-serif; color: var(--text); text-align: center;
+  }
+
+  /* ---------- Panel derecho: "perfil" de la foto ---------- */
+  #info {
+    background: var(--side); border-left: 1px solid var(--line);
+    overflow-y: auto; padding: 22px 20px; min-height: 0;
+    user-select: text;
+  }
+  #info .close-info { display: none; }
+  #info h2 { margin: 0; font-size: 26px; font-weight: 800; word-break: break-all; }
+  #info h2 small { font-size: 16px; font-weight: 400; color: var(--muted); margin-left: 4px; }
+  #info h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin: 24px 0 10px; }
+  .lines { margin-top: 10px; display: flex; flex-direction: column; gap: 7px; font-size: 14px; }
+  .lines div { display: flex; gap: 9px; align-items: center; }
+  .lines svg { width: 17px; height: 17px; flex: none; color: var(--muted); }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { border: 1px solid #3a414c; border-radius: 20px; padding: 5px 13px; font-size: 14px; font-weight: 600; }
+  .chips .none { color: var(--muted); font-size: 13px; }
+  #hist { width: 100%; height: 110px; border-radius: 8px; background: #000; display: block; }
+  #clipping { font-size: 12px; margin-top: 6px; display: flex; gap: 12px; flex-wrap: wrap; }
+  dl.details { display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; margin: 0; font-size: 13px; }
+  dl.details dt { color: var(--muted); }
+  dl.details dd { margin: 0; word-break: break-word; }
+  dl.details a { color: var(--zoom); }
+
+  /* ---------- Pantallas superpuestas ---------- */
+  .screen {
+    position: fixed; inset: 0; z-index: 10;
+    background: radial-gradient(circle at 20% 10%, rgba(253,38,122,.25), transparent 50%),
+                radial-gradient(circle at 80% 90%, rgba(255,96,54,.2), transparent 50%), var(--bg);
+    display: grid; place-items: center;
+    overflow-y: auto; padding: 24px 16px;
+  }
+  .modal { position: fixed; inset: 0; z-index: 20; background: rgba(0,0,0,.65); display: grid; place-items: center; padding: 16px; }
+  .box {
+    width: min(860px, 100%);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 20px;
+    padding: 28px;
+  }
+  .modal .box { width: min(560px, 100%); max-height: calc(100dvh - 32px); display: flex; flex-direction: column; gap: 14px; }
+  .box h1 { margin: 0 0 6px; font-size: 34px; font-weight: 800; }
+  .box h1 span { background: var(--brand); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .box h2 { margin: 0; font-size: 22px; }
+  .box p { margin: 0; color: var(--muted); line-height: 1.5; }
+  .setup-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+  .setup-grid .full { grid-column: 1 / -1; }
+  .setup-head { display: flex; gap: 12px; align-items: flex-start; }
+  .setup-head > div { flex: 1; }
+  .col { display: flex; flex-direction: column; gap: 12px; }
+  .col h4 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+  .step { display: flex; align-items: center; gap: 12px; }
+  .step .num {
+    width: 30px; height: 30px; border-radius: 50%; flex: none;
+    background: #2a313b; display: grid; place-items: center; font-weight: 700;
+  }
+  .step.done .num { background: var(--like); color: #062; }
+  .step button { flex: 1; min-width: 0; text-align: left; padding: 11px 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; }
+  .opts { display: flex; flex-direction: column; gap: 6px; }
+  .opt {
+    display: flex; gap: 10px; align-items: flex-start; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 14px;
+  }
+  .opt:has(input:checked) { border-color: #fd4d5d; background: rgba(253,38,122,.08); }
+  .opt input { accent-color: #fd4d5d; margin-top: 3px; }
+  .opt small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+  #start { padding: 14px; font-size: 17px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .grow { flex: 1; }
+
+  /* explorador de carpetas */
+  #brPath { flex: 1; min-width: 0; }
+  #brList { overflow-y: auto; min-height: 160px; border: 1px solid var(--line); border-radius: 12px; padding: 6px; }
+  #brList .group { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; padding: 10px 8px 4px; }
+  #brList button {
+    display: flex; gap: 10px; align-items: center; width: 100%; text-align: left;
+    background: none; border: none; border-radius: 8px; padding: 9px 10px;
+  }
+  #brList button:hover { background: #242a33; }
+  #brList .note { color: var(--muted); padding: 16px 10px; font-size: 14px; }
+  #brInfo { color: var(--muted); font-size: 13px; }
+
+  /* compartir */
+  #qr { display: grid; place-items: center; background: #fff; border-radius: 14px; padding: 14px; align-self: center; }
+  #qr svg, #qr img { display: block; width: 220px; height: 220px; }
+  #shareUrls { display: flex; flex-direction: column; gap: 6px; }
+  #shareUrls label { display: flex; gap: 10px; align-items: center; font-size: 14px; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; cursor: pointer; }
+  #shareUrls label:has(input:checked) { border-color: #fd4d5d; }
+  #shareUrls small { color: var(--muted); }
+  .share-buttons { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .share-buttons > * { padding: 11px 8px; font-weight: 600; }
+  .whats { background: #25d366; color: #062; border: none; }
+
+  #toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 30;
+    background: #2a313b; padding: 10px 18px; border-radius: 10px; max-width: calc(100vw - 32px);
+    font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none;
+  }
+  #toast.show { opacity: 1; }
+
+  /* ---------- Celular y pantallas chicas ---------- */
+  @media (max-width: 900px) {
+    #app, body.no-info #app { grid-template-columns: 1fr; }
+    #side {
+      position: fixed; inset: 0 auto 0 0; width: min(320px, 86vw); z-index: 8;
+      transform: translateX(-100%); transition: transform .2s; box-shadow: 0 0 40px rgba(0,0,0,.6);
+    }
+    body.side-open #side { transform: none; }
+    #btnMenu { display: inline-block; }
+    #info {
+      position: fixed; left: 0; right: 0; bottom: 0; max-height: 75dvh; z-index: 7;
+      border-left: none; border-top: 1px solid var(--line); border-radius: 18px 18px 0 0;
+      box-shadow: 0 -10px 40px rgba(0,0,0,.6);
+    }
+    #info .close-info { display: block; position: sticky; top: 0; margin: -8px 0 8px auto; }
+    #deck { margin: 0 8px; }
+    #toolbar { padding: 8px; gap: 4px; }
+    #toolbar .desk { display: none; }
+    #shortcuts { display: none; }
+    #actions { gap: 12px; padding: 12px 0 calc(14px + env(safe-area-inset-bottom)); }
+    .round.big { width: 62px; height: 62px; }
+    .round.small { width: 46px; height: 46px; }
+    .overlay .name { font-size: 22px; }
+    .overlay .name small { font-size: 15px; }
+    .overlay .line { font-size: 13px; }
+    .stamp { font-size: 34px; top: 24px; }
+    .setup-grid { grid-template-columns: 1fr; gap: 20px; }
+    .box { padding: 20px; }
+    .box h1 { font-size: 26px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <aside id="side">
+    <div class="side-top">
+      <div class="logo">Kyro</div>
+      <button id="btnShare" title="Abrir desde el celular u otro dispositivo">Compartir</button>
+      <button id="btnSetup" title="Cambiar carpetas y modo">Carpetas</button>
+    </div>
+    <div class="side-block">
+      <div class="kv">
+        <span class="k">Origen</span><span class="v" id="sSrc">—</span>
+        <span class="k">Destino</span><span class="v" id="sDst">—</span>
+        <span class="k">♥ Match</span><span class="v" id="sLikeOp">—</span>
+        <span class="k">✕ Nope</span><span class="v" id="sNopeOp">—</span>
+      </div>
+    </div>
+    <div class="side-block">
+      <span class="k">Ordenar por</span>
+      <div class="sort-row">
+        <select id="sortBy">
+          <option value="name">Nombre</option>
+          <option value="date">Fecha de modificación</option>
+          <option value="capture">Fecha de captura</option>
+          <option value="size">Tamaño</option>
+          <option value="type">Tipo</option>
+        </select>
+        <select id="sortDir">
+          <option value="asc">↑ Asc</option>
+          <option value="desc">↓ Desc</option>
+        </select>
+      </div>
+    </div>
+    <div class="side-block">
+      <div class="progress"><div id="progressBar"></div></div>
+      <div class="counts">
+        <span>Foto <b id="cPos">0</b> de <b id="cTotal">0</b></span>
+        <span>♥ <b id="cLikes">0</b> · ✕ <b id="cNopes">0</b></span>
+      </div>
+      <div id="status"></div>
+    </div>
+    <div class="tabs">
+      <button class="active" data-tab="like">Matches</button>
+      <button data-tab="nope">Descartadas</button>
+    </div>
+    <div id="thumbs"></div>
+  </aside>
+
+  <section id="center">
+    <div id="toolbar">
+      <button id="btnMenu" title="Menú">☰</button>
+      <button id="zOut" class="desk" title="Alejar (−)">−</button>
+      <span id="zoomLabel">—</span>
+      <button id="zIn" class="desk" title="Acercar (+)">+</button>
+      <button id="zFit" title="Ajustar a pantalla (0)">Ajustar</button>
+      <button id="z100" title="Tamaño real (Z)">100%</button>
+      <button id="skipFolder" title="Pasar a la próxima carpeta sin decidir estas fotos (S)">Saltear carpeta ⏭</button>
+    </div>
+    <div id="deck"></div>
+    <div id="actions">
+      <button class="round small rewind" id="btnUndo" title="Deshacer (Retroceso)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 3v6h6"/></svg>
+      </button>
+      <button class="round big nope" id="btnNope" title="Nope (←)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"><path d="M5 5l14 14M19 5L5 19"/></svg>
+      </button>
+      <button class="round small zoom" id="btnZoom" title="Ver al 100% (Z)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21M10.5 7.5v6M7.5 10.5h6"/></svg>
+      </button>
+      <button class="round big like" id="btnLike" title="Match (→)">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 21s-7.5-4.6-9.6-9.2C.9 8.4 2.9 4.5 6.6 4.5c2.2 0 3.6 1.2 5.4 3.2 1.8-2 3.2-3.2 5.4-3.2 3.7 0 5.7 3.9 4.2 7.3C19.5 16.4 12 21 12 21z"/></svg>
+      </button>
+      <button class="round small info" id="btnInfo" title="Ver datos (I)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.01"/></svg>
+      </button>
+    </div>
+    <div id="shortcuts">
+      <span><kbd>←</kbd>NOPE</span>
+      <span><kbd>→</kbd>MATCH</span>
+      <span><kbd>⌫</kbd>DESHACER</span>
+      <span><kbd>S</kbd>SALTEAR CARPETA</span>
+      <span><kbd>Z</kbd>100%</span>
+      <span><kbd>RUEDA</kbd>ZOOM</span>
+      <span><kbd>I</kbd>DATOS</span>
+      <span><kbd>H</kbd>OCULTAR TEXTO</span>
+      <span><kbd>F</kbd>PANTALLA COMPLETA</span>
+    </div>
+  </section>
+
+  <aside id="info"></aside>
+</div>
+
+<!-- Inicio: carpetas y modo -->
+<div id="setup" class="screen hidden">
+  <div class="box">
+    <div class="setup-grid">
+      <div class="full setup-head">
+        <div>
+          <h1>Hacé <span>match</span> con tus fotos</h1>
+          <p>Deslizá a la derecha las que te gustan y a la izquierda las que no. Las fotos se guardan en esta PC; podés elegirlas desde el celular.</p>
+        </div>
+        <button id="btnShare2" title="Abrir desde el celular">📱 Compartir</button>
+      </div>
+      <div class="col">
+        <h4>Carpetas</h4>
+        <div class="step" id="stepSrc">
+          <div class="num">1</div>
+          <button id="pickSrc">Carpeta con las fotos…</button>
+        </div>
+        <div class="step" id="stepDst">
+          <div class="num">2</div>
+          <button id="pickDst">Carpeta destino de los matches…</button>
+        </div>
+        <p style="font-size:13px">Se incluyen las fotos de todas las subcarpetas. Para una carpeta compartida en red, escribí la ruta, por ejemplo <b>\\192.168.100.2\Imagenes</b>.</p>
+        <label class="opt"><input type="checkbox" id="groupRaw" checked><div>Agrupar RAW + JPG<small>Si una foto está en los dos formatos, aparece una sola vez y se procesan juntas.</small></div></label>
+        <label class="opt"><input type="checkbox" id="keepTree"><div>Mantener las subcarpetas en el destino<small>Si no, todos los matches van juntos a la misma carpeta.</small></div></label>
+      </div>
+      <div class="col">
+        <h4>Con los matches ♥</h4>
+        <div class="opts">
+          <label class="opt"><input type="radio" name="likeOp" value="copy" checked><div>Copiar al destino<small>El original queda donde está.</small></div></label>
+          <label class="opt"><input type="radio" name="likeOp" value="move"><div>Mover al destino<small>Sale de la carpeta de origen.</small></div></label>
+        </div>
+        <h4>Con los descartes ✕</h4>
+        <div class="opts">
+          <label class="opt"><input type="radio" name="nopeOp" value="keep" checked><div>Dejarlos donde están</div></label>
+          <label class="opt"><input type="radio" name="nopeOp" value="discard"><div>Mover a “Descartadas”<small>Subcarpeta dentro de la carpeta de origen.</small></div></label>
+          <label class="opt"><input type="radio" name="nopeOp" value="delete"><div>Borrarlos<small class="warn">Definitivo, no van a la papelera. Se pueden deshacer las últimas 10.</small></div></label>
+        </div>
+      </div>
+      <div class="full col">
+        <button id="start" class="primary" disabled>Empezar a matchear</button>
+        <button id="backToSwipe" class="hidden">Volver a las fotos</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Explorador de carpetas (del servidor) -->
+<div id="browser" class="modal hidden">
+  <div class="box">
+    <h2 id="brTitle">Elegir carpeta</h2>
+    <div class="row">
+      <input id="brPath" placeholder="Pegá una ruta: C:\Fotos o \\192.168.100.2\Imagenes" spellcheck="false">
+      <button id="brGo">Ir</button>
+    </div>
+    <div id="brList"></div>
+    <div id="brInfo"></div>
+    <div class="row">
+      <button id="brUp">⬆ Subir</button>
+      <button id="brNew">Nueva carpeta</button>
+      <span class="grow"></span>
+      <button id="brCancel">Cancelar</button>
+      <button id="brPick" class="primary">Elegir esta carpeta</button>
+    </div>
+  </div>
+</div>
+
+<!-- Compartir el link del servidor -->
+<div id="share" class="modal hidden">
+  <div class="box">
+    <h2>Abrir desde el celular</h2>
+    <p>Conectá el celular a la misma red Wi-Fi que esta PC y escaneá el código o abrí el link.</p>
+    <div id="qr"></div>
+    <div id="shareUrls"></div>
+    <div class="share-buttons">
+      <button id="shareNative" class="primary">Compartir</button>
+      <a id="shareWhats" class="button whats" target="_blank" rel="noopener">WhatsApp</a>
+      <button id="shareCopy">Copiar link</button>
+    </div>
+    <button id="shareClose">Cerrar</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const OP_LABEL = {
+  copy: 'Copiar al destino', move: 'Mover al destino',
+  keep: 'Dejar en origen', discard: 'Mover a “Descartadas”', delete: 'Borrar',
+};
+const SWIPE_THRESHOLD = 110;
+const LIB = {
+  heic: 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js',
+  pako: 'https://cdn.jsdelivr.net/npm/pako@1.0.11/dist/pako.min.js',
+  utif: 'https://cdn.jsdelivr.net/npm/utif@3.1.0/UTIF.js',
+  qr: 'https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js',
+};
+
+const ICON = {
+  calendar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>',
+  camera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 7h3l2-3h6l2 3h3a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="4"/></svg>',
+  lens: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/></svg>',
+  folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></svg>',
+  size: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15l5-5 4 4 3-3 6 6"/></svg>',
+  drive: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 12h.01"/></svg>',
+};
+
+const $ = (id) => document.getElementById(id);
+const collator = new Intl.Collator('es', { numeric: true, sensitivity: 'base' });
+
+let S = null;            // último estado del servidor
+let shownId = null;      // id de la foto en pantalla
+let busy = false;
+let tab = 'like';
+let setupReturn = false; // la pantalla de inicio se abrió desde "Carpetas" con una sesión en curso
+let seenErrors = -1;
+const pick = { src: '', dst: '' };
+
+// ================= Comunicación con el servidor =================
+
+async function api(path, body) {
+  const res = await fetch('/api/' + path, body === undefined ? { cache: 'no-store' } : {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.error || res.statusText);
+    err.status = res.status;
+    err.state = data.state;
+    throw err;
+  }
+  return data;
+}
+
+let offline = false;
+async function poll() {
+  try {
+    applyState(await api('state'));
+    if (offline) { offline = false; toast('Conectado de nuevo'); }
+  } catch {
+    if (!offline) { offline = true; toast('Sin conexión con Kyro. ¿Está abierto el programa en la PC?'); }
+  }
+  setTimeout(poll, S?.scan?.running || S?.pending ? 1000 : 2000);
+}
+
+let configLoaded = false;
+let lastPreset = '';
+
+function applyState(st) {
+  S = st;
+  if (!st.preset) lastPreset = '';
+  else if (st.preset !== lastPreset) {
+    // se eligió una carpeta con clic derecho → "Elegir fotos con Kyro"
+    lastPreset = st.preset;
+    showSetup({ src: st.preset }, st.active);
+    toast('Carpeta elegida desde Windows: ' + st.preset);
+  }
+  if (!st.active) {
+    shownId = null;
+    if (!configLoaded) { configLoaded = true; showSetup(st.config); }
+    else $('setup').classList.remove('hidden');
+    return;
+  }
+  if (!setupReturn) $('setup').classList.add('hidden');
+  updateSidebar();
+  showErrors();
+  const cur = st.window[0];
+  if ((cur?.id ?? null) !== shownId || !currentCard() && cur) render();
+  else if (!cur) render();
+}
+
+function showErrors() {
+  for (const e of S.errors) {
+    if (e.n > seenErrors) { toast(`${e.name}: ${e.message}`); seenErrors = e.n; }
+  }
+}
+
+// ================= Pantalla de inicio =================
+
+function showSetup(cfg, keepSession = false) {
+  if (cfg) {
+    if (cfg.src) setPick('src', cfg.src);
+    if (cfg.dst && !pick.dst) setPick('dst', cfg.dst);
+    const o = cfg.opts || {};
+    const check = (name, v) => { const el = document.querySelector(`input[name=${name}][value="${v}"]`); if (el) el.checked = true; };
+    if (o.likeOp) check('likeOp', o.likeOp);
+    if (o.nopeOp) check('nopeOp', o.nopeOp);
+    if (o.groupRaw !== undefined) $('groupRaw').checked = o.groupRaw;
+    if (o.keepTree !== undefined) $('keepTree').checked = o.keepTree;
+    if (o.sortBy) $('sortBy').value = o.sortBy;
+    if (o.sortDir) $('sortDir').value = o.sortDir;
+  }
+  setupReturn = keepSession;
+  $('backToSwipe').classList.toggle('hidden', !keepSession);
+  $('setup').classList.remove('hidden');
+}
+
+function setPick(which, p) {
+  pick[which] = p;
+  const step = which === 'src' ? 'stepSrc' : 'stepDst';
+  const btn = which === 'src' ? 'pickSrc' : 'pickDst';
+  $(step).classList.toggle('done', !!p);
+  $(btn).textContent = p || (which === 'src' ? 'Carpeta con las fotos…' : 'Carpeta destino de los matches…');
+  $(btn).title = p;
+  $('start').disabled = !(pick.src && pick.dst);
+}
+
+$('pickSrc').onclick = () => openBrowser('src');
+$('pickDst').onclick = () => openBrowser('dst');
+$('btnSetup').onclick = () => { closeSide(); showSetup(null, true); };
+$('backToSwipe').onclick = () => {
+  setupReturn = false;
+  $('setup').classList.add('hidden');
+  if (S?.preset) api('clear-preset', {}).catch(() => {});
+};
+
+$('start').onclick = async () => {
+  const likeOp = document.querySelector('input[name=likeOp]:checked').value;
+  const nopeOp = document.querySelector('input[name=nopeOp]:checked').value;
+  if (nopeOp === 'delete' &&
+      !confirm('Las fotos que descartes se van a BORRAR definitivamente (no van a la papelera).\nSolo vas a poder deshacer las últimas 10.\n\n¿Seguimos?')) return;
+  $('start').disabled = true;
+  try {
+    const st = await api('start', {
+      src: pick.src, dst: pick.dst, likeOp, nopeOp,
+      groupRaw: $('groupRaw').checked, keepTree: $('keepTree').checked,
+      sortBy: $('sortBy').value, sortDir: $('sortDir').value,
+    });
+    setupReturn = false;
+    shownId = null;
+    seenErrors = -1;
+    applyState(st);
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    $('start').disabled = !(pick.src && pick.dst);
+  }
+};
+
+// ================= Explorador de carpetas =================
+// Muestra las carpetas de la PC donde corre Kyro (también desde el celular).
+
+let brTarget = 'src';
+let brCurrent = '';
+
+function openBrowser(which) {
+  brTarget = which;
+  $('brTitle').textContent = which === 'src' ? 'Carpeta con las fotos' : 'Carpeta destino de los matches';
+  $('brNew').classList.toggle('hidden', false);
+  $('browser').classList.remove('hidden');
+  browse(pick[which] || '');
+}
+
+async function browse(p) {
+  $('brList').innerHTML = '<div class="note">Cargando…</div>';
+  let d;
+  try {
+    d = await api('browse?path=' + encodeURIComponent(p));
+  } catch (e) {
+    $('brList').innerHTML = `<div class="note warn">${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  brCurrent = d.path;
+  $('brPath').value = d.path;
+  $('brUp').disabled = d.parent === null;
+  $('brPick').disabled = !d.path;
+  $('brNew').disabled = !d.path || /^\\\\[^\\]+\\?$/.test(d.path);
+  $('brInfo').textContent = d.path && d.images !== undefined ? `${d.images} fotos sueltas en esta carpeta (sin contar subcarpetas)` : '';
+  $('brList').dataset.parent = d.parent ?? '';
+
+  const item = (x, icon) => `<button data-path="${escapeHtml(x.path)}">${icon || ICON.folder.replace('<svg', '<svg width="18" height="18"')}<span>${escapeHtml(x.name)}</span></button>`;
+  let html = '';
+  if (!d.path) {
+    if (d.recent?.length) html += '<div class="group">Usadas hace poco</div>' + d.recent.map((x) => item(x)).join('');
+    html += '<div class="group">Lugares</div>' + d.places.map((x) => item(x)).join('');
+    html += '<div class="group">Discos</div>' + d.roots.map((x) => item(x, ICON.drive)).join('');
+    html += '<div class="note">Para una carpeta de otra PC, escribí arriba \\\\IP-o-nombre\\carpeta y tocá Ir.</div>';
+  } else {
+    html = d.dirs.map((x) => item(x)).join('') || `<div class="note">${escapeHtml(d.note || 'No hay subcarpetas.')}</div>`;
+  }
+  $('brList').innerHTML = html;
+  $('brList').querySelectorAll('button[data-path]').forEach((b) => { b.onclick = () => browse(b.dataset.path); });
+}
+
+$('brGo').onclick = () => browse($('brPath').value.trim());
+$('brPath').onkeydown = (e) => { if (e.key === 'Enter') browse($('brPath').value.trim()); };
+$('brUp').onclick = () => browse($('brList').dataset.parent || '');
+$('brCancel').onclick = () => $('browser').classList.add('hidden');
+$('brPick').onclick = () => {
+  if (!brCurrent) return;
+  setPick(brTarget, brCurrent);
+  $('browser').classList.add('hidden');
+};
+$('brNew').onclick = async () => {
+  const name = prompt('Nombre de la carpeta nueva:');
+  if (!name) return;
+  try {
+    const r = await api('mkdir', { path: brCurrent, name });
+    browse(r.path);
+  } catch (e) { toast(e.message); }
+};
+
+// ================= Compartir el link =================
+
+let shareUrl = '';
+
+async function openShare() {
+  closeSide();
+  $('share').classList.remove('hidden');
+  let info;
+  try { info = await api('info'); } catch (e) { return toast(e.message); }
+  const urls = info.urls.length ? info.urls : [{ url: location.origin, name: 'este navegador' }];
+  $('shareUrls').innerHTML = urls.map((u, i) => `
+    <label><input type="radio" name="shareUrl" value="${escapeHtml(u.url)}" ${i === 0 ? 'checked' : ''}>
+      <div><b>${escapeHtml(u.url)}</b><br><small>${escapeHtml(u.name)}${u.virtual ? ' · virtual, probablemente no sirva' : ''}</small></div></label>`).join('');
+  $('shareUrls').querySelectorAll('input').forEach((r) => { r.onchange = () => setShareUrl(r.value); });
+  setShareUrl(urls[0].url);
+}
+
+async function setShareUrl(url) {
+  shareUrl = url;
+  $('shareWhats').href = 'https://wa.me/?text=' + encodeURIComponent('Kyro Photo Selector: ' + url);
+  try {
+    await loadScript(LIB.qr);
+    const qr = qrcode(0, 'M');
+    qr.addData(url);
+    qr.make();
+    $('qr').innerHTML = qr.createSvgTag({ cellSize: 6, margin: 0, scalable: true });
+  } catch {
+    $('qr').innerHTML = '<span style="color:#333">Sin internet para dibujar el código QR</span>';
+  }
+}
+
+$('btnShare').onclick = openShare;
+$('btnShare2').onclick = openShare;
+$('shareClose').onclick = () => $('share').classList.add('hidden');
+$('shareNative').onclick = async () => {
+  if (navigator.share) {
+    try { await navigator.share({ title: 'Kyro Photo Selector', text: 'Elegí las fotos desde acá:', url: shareUrl }); } catch { /* cancelado */ }
+  } else {
+    window.open($('shareWhats').href, '_blank');
+  }
+};
+$('shareCopy').onclick = async () => {
+  try {
+    await navigator.clipboard.writeText(shareUrl);
+  } catch {
+    // por http en la red local el portapapeles moderno no está disponible
+    const ta = document.createElement('textarea');
+    ta.value = shareUrl;
+    document.body.append(ta);
+    ta.select();
+    document.execCommand('copy');
+    ta.remove();
+  }
+  toast('Link copiado: ' + shareUrl);
+};
+
+// ================= Barra lateral =================
+
+let thumbsKey = '';
+
+function updateSidebar() {
+  $('sSrc').textContent = S.src;
+  $('sDst').textContent = S.dst;
+  $('sLikeOp').textContent = OP_LABEL[S.opts.likeOp];
+  $('sNopeOp').textContent = OP_LABEL[S.opts.nopeOp];
+  if (document.activeElement !== $('sortBy')) $('sortBy').value = S.opts.sortBy;
+  if (document.activeElement !== $('sortDir')) $('sortDir').value = S.opts.sortDir;
+  $('cPos').textContent = Math.min(S.index + 1, S.total);
+  $('cTotal').textContent = S.total;
+  $('cLikes').textContent = S.likes;
+  $('cNopes').textContent = S.nopes;
+  $('progressBar').style.width = S.total ? (S.index / S.total * 100) + '%' : '0';
+
+  const lines = [];
+  if (S.scan.running) {
+    lines.push(`<span>Buscando fotos: ${S.scan.found} encontradas · ${escapeHtml(S.scan.where)}</span>`);
+    lines.push('<div class="row"><button onclick="api(\'skip-scan-dir\', {})">Saltear esta carpeta</button><button onclick="api(\'cancel-scan\', {})">Dejar de buscar</button></div>');
+  }
+  if (S.scan.sorting) lines.push(`<span>${escapeHtml(S.scan.sorting)}</span>`);
+  if (S.pending) lines.push(`<span>Procesando ${S.pending} ${S.pending === 1 ? 'foto' : 'fotos'} en segundo plano…</span>`);
+  $('status').innerHTML = lines.join('');
+
+  const items = S.history.filter((h) => h.action === tab).reverse();
+  const key = tab + ':' + items.map((h) => h.id).join(',');
+  if (key === thumbsKey) return;
+  thumbsKey = key;
+  $('thumbs').innerHTML = items.length
+    ? items.map((h) => `<div class="thumb" title="${escapeHtml(h.name)}"><img src="/api/thumb/${h.id}" alt="" loading="lazy" onerror="this.remove()"><span>${escapeHtml(h.name)}</span></div>`).join('')
+    : `<div class="none">${tab === 'like' ? 'Todavía no hay matches' : 'Todavía no descartaste fotos'}</div>`;
+}
+
+document.querySelectorAll('.tabs button').forEach((b) => {
+  b.onclick = () => {
+    tab = b.dataset.tab;
+    document.querySelectorAll('.tabs button').forEach((x) => x.classList.toggle('active', x === b));
+    if (S?.active) updateSidebar();
+  };
+});
+
+$('sortBy').onchange = $('sortDir').onchange = () => {
+  if (S?.active) api('sort', { sortBy: $('sortBy').value, sortDir: $('sortDir').value }).then(applyState).catch((e) => toast(e.message));
+};
+
+$('btnMenu').onclick = () => document.body.classList.toggle('side-open');
+function closeSide() { document.body.classList.remove('side-open'); }
+$('center').addEventListener('pointerdown', (e) => { if (e.target.id !== 'btnMenu') closeSide(); });
+
+function makeThumb(img) {
+  if (!img?.naturalWidth) return '';
+  const c = document.createElement('canvas');
+  const scale = 240 / Math.max(img.naturalWidth, img.naturalHeight);
+  c.width = Math.round(img.naturalWidth * scale);
+  c.height = Math.round(img.naturalHeight * scale);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.75);
+}
+
+// ================= Carga de fotos =================
+
+const photos = new Map(); // id -> Promise<{ url, note, meta }>
+
+function loadPhoto(item) {
+  if (!photos.has(item.id)) {
+    const p = (async () => {
+      const [res, meta] = await Promise.all([
+        fetch('/api/photo/' + item.id, { cache: 'no-store' }),
+        api('meta?id=' + item.id).catch(() => null),
+      ]);
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'no se pudo leer');
+      let blob = await res.blob();
+      const convert = res.headers.get('X-Convert');
+      if (convert === 'heic') blob = await heicToJpeg(blob);
+      if (convert === 'tiff') blob = await tiffToImage(blob);
+      const rot = +res.headers.get('X-Orientation');
+      if (rot) blob = await rotateBlob(blob, rot);
+      if (meta?.exif?.date) meta.exif.date = new Date(meta.exif.date);
+      return { url: URL.createObjectURL(blob), note: decodeURIComponent(res.headers.get('X-Note') || ''), meta };
+    })();
+    p.catch(() => photos.delete(item.id));
+    photos.set(item.id, p);
+  }
+  return photos.get(item.id);
+}
+
+function prunePhotos() {
+  const keep = new Set(S.window.map((w) => w.id));
+  for (const [id, p] of photos) {
+    if (keep.has(id)) continue;
+    photos.delete(id);
+    // se libera después de la animación de salida
+    p.then((d) => setTimeout(() => URL.revokeObjectURL(d.url), 1500)).catch(() => {});
+  }
+}
+
+async function rotateBlob(blob, orientation) {
+  const bmp = await createImageBitmap(blob);
+  const swap = orientation === 6 || orientation === 8;
+  const c = document.createElement('canvas');
+  c.width = swap ? bmp.height : bmp.width;
+  c.height = swap ? bmp.width : bmp.height;
+  const ctx = c.getContext('2d');
+  if (orientation === 3) { ctx.translate(c.width, c.height); ctx.rotate(Math.PI); }
+  if (orientation === 6) { ctx.translate(c.width, 0); ctx.rotate(Math.PI / 2); }
+  if (orientation === 8) { ctx.translate(0, c.height); ctx.rotate(-Math.PI / 2); }
+  ctx.drawImage(bmp, 0, 0);
+  bmp.close();
+  return canvasToBlob(c);
+}
+
+function canvasToBlob(canvas) {
+  return new Promise((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('no se pudo convertir'))), 'image/jpeg', 0.96));
+}
+
+const scripts = {};
+function loadScript(src) {
+  return scripts[src] ??= new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => { delete scripts[src]; reject(new Error('hace falta internet para cargar el decodificador')); };
+    document.head.append(s);
+  });
+}
+
+async function heicToJpeg(blob) {
+  await loadScript(LIB.heic);
+  const out = await heic2any({ blob, toType: 'image/jpeg', quality: 0.96 });
+  return Array.isArray(out) ? out[0] : out;
+}
+
+async function tiffToImage(blob) {
+  await loadScript(LIB.pako);
+  await loadScript(LIB.utif);
+  const buf = await blob.arrayBuffer();
+  const ifds = UTIF.decode(buf).filter((d) => d.t256);
+  if (!ifds.length) throw new Error('TIFF sin imagen');
+  const page = ifds.reduce((a, b) => (b.t256[0] * (b.t257?.[0] || 1) > a.t256[0] * (a.t257?.[0] || 1) ? b : a));
+  UTIF.decodeImage(buf, page);
+  const rgba = UTIF.toRGBA8(page);
+  const c = document.createElement('canvas');
+  c.width = page.width;
+  c.height = page.height;
+  c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.length), page.width, page.height), 0, 0);
+  return canvasToBlob(c);
+}
+
+// ================= Render =================
+
+let renderToken = 0;
+
+function currentCard() {
+  return $('deck').querySelector('.card:not(.behind)');
+}
+
+async function render() {
+  const token = ++renderToken;
+  const deck = $('deck');
+  const cur = S.window[0];
+  shownId = cur?.id ?? null;
+
+  if (!cur) {
+    const again = '<button class="primary" onclick="showSetup(null, true)">Elegir otra carpeta</button>';
+    deck.innerHTML = S.scan.running
+      ? `<div class="empty"><div><h2>Buscando fotos…</h2><p>${S.scan.found} encontradas · ${escapeHtml(S.scan.where)}<br>Aparecen solas apenas lleguen.</p></div></div>`
+      : S.total
+        ? `<div class="empty"><div><h2>¡Terminaste!</h2><p>♥ ${S.likes} matches · ✕ ${S.nopes} descartadas${S.pending ? `<br>Terminando de procesar ${S.pending}…` : ''}</p>${again}</div></div>`
+        : `<div class="empty"><div><h2>No hay fotos</h2><p>La carpeta no tiene imágenes compatibles.</p>${again}</div></div>`;
+    $('info').innerHTML = '';
+    updateZoomLabel();
+    return;
+  }
+
+  // si tarda (RAW pesado o red lenta), se avisa en vez de dejar la pantalla vacía
+  const started = Date.now();
+  const waiting = setInterval(() => {
+    if (token !== renderToken) return clearInterval(waiting);
+    const secs = Math.round((Date.now() - started) / 1000);
+    deck.innerHTML = `<div class="empty"><div><h2>Cargando foto…</h2><p>${escapeHtml(pathOf(cur))}<br>${secs} s</p></div></div>`;
+  }, 1000);
+
+  let card;
+  try {
+    card = await buildCard(cur, false);
+  } finally {
+    clearInterval(waiting);
+  }
+  if (token !== renderToken) return;
+
+  deck.replaceChildren(card);
+  zoom.s = 1; zoom.tx = 0; zoom.ty = 0;
+  applyZoom();
+  attachPointer(card);
+  fillInfo(cur, card.querySelector('img'), card._data);
+
+  // la de atrás se agrega cuando llega; después se precarga una más
+  const next = S.window[1], after = S.window[2];
+  if (next) {
+    buildCard(next, true)
+      .then((behind) => { if (token === renderToken) deck.prepend(behind); })
+      .then(() => after && token === renderToken && loadPhoto(after))
+      .catch(() => {});
+  }
+  prunePhotos();
+}
+
+const pathOf = (f) => (f.folder ? f.folder + '/' : '') + f.name;
+
+async function buildCard(item, behind) {
+  let img = null, error = null, data = null;
+  try {
+    data = await loadPhoto(item);
+    img = new Image();
+    img.draggable = false;
+    img.src = data.url;
+    await img.decode();
+  } catch (e) {
+    img = null;
+    error = e?.message || 'formato no soportado';
+  }
+
+  const card = document.createElement('div');
+  card.className = 'card' + (behind ? ' behind' : '');
+  card._data = data;
+  card.dataset.w = img?.naturalWidth || 3;
+  card.dataset.h = img?.naturalHeight || 2;
+  if (img) card.append(img);
+  else card.insertAdjacentHTML('beforeend', `<div class="error"><div><b>No se puede mostrar esta foto</b>${escapeHtml(error)}<br>Igual podés hacer match o descartarla.</div></div>`);
+
+  if (!behind) {
+    const x = data?.meta?.exif;
+    const { base } = splitName(item.name);
+    const date = x?.date || (data?.meta ? new Date(data.meta.mtime) : null);
+    const cam = cameraName(x);
+    card.insertAdjacentHTML('beforeend', `
+      <div class="stamp like">MATCH</div>
+      <div class="stamp nope">NOPE</div>
+      <div class="overlay">
+        <div class="who">
+          <div class="name">${escapeHtml(base)}<small>${escapeHtml(item.parts.map((p) => p.ext.toUpperCase()).join(' + '))}</small></div>
+          ${date ? `<div class="line">${ICON.calendar}${escapeHtml(fmtDate(date))}</div>` : ''}
+          ${cam ? `<div class="line">${ICON.camera}${escapeHtml(cam)}${x.lens ? ' · ' + escapeHtml(x.lens) : ''}</div>` : ''}
+          ${item.folder ? `<div class="line">${ICON.folder}${escapeHtml(item.folder)}</div>` : ''}
+        </div>
+        <button class="info-btn" title="Datos (I)">i</button>
+      </div>`);
+    card.querySelector('.info-btn').onclick = (e) => { e.stopPropagation(); toggleInfo(); };
+    card.querySelector('.info-btn').onpointerdown = (e) => e.stopPropagation();
+  }
+  fitCard(card);
+  return card;
+}
+
+// La tarjeta toma la proporción de la foto y ocupa el máximo espacio posible
+function fitCard(card) {
+  const deck = $('deck');
+  const W = deck.clientWidth, H = deck.clientHeight;
+  const w = +card.dataset.w, h = +card.dataset.h;
+  const r = Math.min(W / w, H / h);
+  card.style.width = Math.floor(w * r) + 'px';
+  card.style.height = Math.floor(h * r) + 'px';
+}
+
+function refit() {
+  $('deck').querySelectorAll('.card').forEach(fitCard);
+  zoom.s = 1; zoom.tx = 0; zoom.ty = 0;
+  applyZoom();
+}
+new ResizeObserver(() => refit()).observe($('deck'));
+
+// ================= Panel de datos =================
+
+function cameraName(x) {
+  if (!x?.model) return x?.make || '';
+  const brand = (x.make || '').split(' ')[0].toLowerCase();
+  return brand && !x.model.toLowerCase().startsWith(brand) ? `${x.make} ${x.model}` : x.model;
+}
+
+function fmtExposure(t) {
+  if (!t) return '';
+  return t >= 1 ? `${+t.toFixed(1)} s` : `1/${Math.round(1 / t)} s`;
+}
+
+function fmtDate(d) {
+  return d.toLocaleString('es-AR', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function fillInfo(item, img, data) {
+  const meta = data?.meta || {};
+  const x = meta.exif || {};
+  const { base, ext } = splitName(item.name);
+  const w = img?.naturalWidth || 0, h = img?.naturalHeight || 0;
+  const cam = cameraName(x);
+  const date = x.date || (meta.mtime ? new Date(meta.mtime) : null);
+  const parts = meta.parts || item.parts;
+
+  const lines = [
+    date && [ICON.calendar, fmtDate(date) + (x.date ? '' : ' (modificación)')],
+    cam && [ICON.camera, cam],
+    x.lens && [ICON.lens, x.lens],
+    [ICON.size, (w ? `${w} × ${h} px · ${(w * h / 1e6).toFixed(1)} MP` : '') + (meta.size ? ` · ${formatSize(meta.size)}` : '')],
+    [ICON.folder, (meta.root || '') + (item.folder ? '/' + item.folder : '')],
+  ].filter(Boolean);
+
+  const chips = [
+    x.focal && `${Math.round(x.focal)} mm${x.focal35 && x.focal35 !== Math.round(x.focal) ? ` (${x.focal35} mm eq.)` : ''}`,
+    x.fnumber && `f/${+x.fnumber.toFixed(1)}`,
+    x.exposure && fmtExposure(x.exposure),
+    x.iso && `ISO ${x.iso}`,
+    x.ev != null && x.ev !== 0 && `${x.ev > 0 ? '+' : ''}${+x.ev.toFixed(1)} EV`,
+  ].filter(Boolean);
+
+  const PROGRAM = { 1: 'Manual', 2: 'Programa', 3: 'Prioridad de apertura', 4: 'Prioridad de velocidad', 5: 'Creativo', 6: 'Acción', 7: 'Retrato', 8: 'Paisaje' };
+  const METERING = { 1: 'Promedio', 2: 'Ponderada al centro', 3: 'Puntual', 4: 'Multipunto', 5: 'Matricial / evaluativa', 6: 'Parcial' };
+  const details = [
+    ['Archivo', parts.map((p) => p.name + (p.size ? ` (${formatSize(p.size)})` : '')).join(' + ')],
+    ['Formato', parts.map((p) => p.ext.toUpperCase()).join(' + ')],
+    ['Vista', data?.note],
+    ['Orientación', w && (w > h ? 'Horizontal' : w < h ? 'Vertical' : 'Cuadrada')],
+    ['Modo', PROGRAM[x.program]],
+    ['Medición', METERING[x.metering]],
+    ['Flash', x.flash != null ? (x.flash & 1 ? 'Disparado' : 'No disparado') : null],
+    ['Balance de blancos', x.wb != null ? (x.wb === 0 ? 'Automático' : 'Manual') : null],
+    ['Espacio de color', x.colorSpace === 1 ? 'sRGB' : x.colorSpace === 65535 ? 'Sin calibrar (p. ej. Adobe RGB)' : null],
+    ['Marca del lente', x.lensMake],
+    ['N.º de serie', x.serial],
+    ['Software', x.software],
+    ['Autor', x.artist],
+    ['Copyright', x.copyright],
+    ['Modificado', meta.mtime && fmtDate(new Date(meta.mtime))],
+  ].filter(([, v]) => v);
+
+  const gps = x.gps
+    ? `<dt>Ubicación</dt><dd><a href="https://www.google.com/maps?q=${x.gps.lat},${x.gps.lon}" target="_blank" rel="noopener">${x.gps.lat.toFixed(5)}, ${x.gps.lon.toFixed(5)}</a></dd>`
+    : '';
+
+  $('info').innerHTML = `
+    <button class="close-info" onclick="toggleInfo(false)">Cerrar ✕</button>
+    <h2>${escapeHtml(base)}<small>.${escapeHtml(ext)}</small></h2>
+    <div class="lines">${lines.map(([icon, t]) => `<div>${icon}<span>${escapeHtml(t)}</span></div>`).join('')}</div>
+    <h3>Exposición</h3>
+    <div class="chips">${chips.length ? chips.map((c) => `<span class="chip">${escapeHtml(c)}</span>`).join('') : '<span class="none">Sin datos EXIF de exposición</span>'}</div>
+    <h3>Histograma</h3>
+    <canvas id="hist" width="512" height="200"></canvas>
+    <div id="clipping"></div>
+    <h3>Detalles</h3>
+    <dl class="details">${details.map(([k, v]) => `<dt>${k}</dt><dd>${escapeHtml(v)}</dd>`).join('')}${gps}</dl>`;
+
+  drawHistogram(img);
+}
+
+function drawHistogram(img) {
+  const canvas = $('hist');
+  if (!canvas || !img?.naturalWidth) return;
+  const sw = 400;
+  const sh = Math.max(1, Math.round(sw * img.naturalHeight / img.naturalWidth));
+  const off = document.createElement('canvas');
+  off.width = sw; off.height = sh;
+  const octx = off.getContext('2d', { willReadFrequently: true });
+  octx.drawImage(img, 0, 0, sw, sh);
+  let data;
+  try { data = octx.getImageData(0, 0, sw, sh).data; } catch { return; }
+
+  const r = new Uint32Array(256), g = new Uint32Array(256), b = new Uint32Array(256), l = new Uint32Array(256);
+  for (let i = 0; i < data.length; i += 4) {
+    r[data[i]]++; g[data[i + 1]]++; b[data[i + 2]]++;
+    l[Math.round(0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2])]++;
+  }
+  // el máximo ignora los extremos para que un pico de negro/blanco no aplaste el resto
+  let max = 1;
+  for (const ch of [r, g, b]) for (let i = 1; i < 255; i++) max = Math.max(max, ch[i]);
+
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  ctx.globalCompositeOperation = 'lighter';
+  const draw = (ch, color) => {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(0, H);
+    for (let i = 0; i < 256; i++) ctx.lineTo(i / 255 * W, H - Math.min(1, ch[i] / max) * H);
+    ctx.lineTo(W, H);
+    ctx.fill();
+  };
+  draw(r, 'rgba(255,60,60,.7)');
+  draw(g, 'rgba(60,220,90,.7)');
+  draw(b, 'rgba(70,120,255,.7)');
+
+  const total = sw * sh;
+  const shadows = l[0] / total, highlights = l[255] / total;
+  const warn = [];
+  if (shadows > 0.005) warn.push(`<span class="warn">▼ Sombras recortadas ${(shadows * 100).toFixed(1)}%</span>`);
+  if (highlights > 0.005) warn.push(`<span class="warn">▲ Luces quemadas ${(highlights * 100).toFixed(1)}%</span>`);
+  $('clipping').innerHTML = warn.join('') || '<span style="color:var(--muted)">Sin recortes en luces ni sombras</span>';
+}
+
+function toggleInfo(force) {
+  document.body.classList.toggle('no-info', force === undefined ? undefined : !force);
+}
+
+// ================= Zoom y paneo =================
+
+const zoom = { s: 1, tx: 0, ty: 0 };
+
+function actualScale(card) {
+  // escala que muestra la foto a tamaño real (1 píxel de la foto = 1 píxel de pantalla)
+  return (+card.dataset.w / card.clientWidth) / devicePixelRatio;
+}
+
+function applyZoom() {
+  const card = currentCard();
+  if (card) {
+    const img = card.querySelector('img');
+    if (img) img.style.transform = `translate(${zoom.tx}px, ${zoom.ty}px) scale(${zoom.s})`;
+    card.classList.toggle('zoomed', zoom.s > 1.001);
+  }
+  updateZoomLabel();
+}
+
+function updateZoomLabel() {
+  const card = currentCard();
+  $('zoomLabel').textContent = card ? Math.round(zoom.s / actualScale(card) * 100) + '%' : '—';
+}
+
+function clampPan(card) {
+  const W = card.clientWidth, H = card.clientHeight;
+  zoom.tx = Math.min(0, Math.max(W - W * zoom.s, zoom.tx));
+  zoom.ty = Math.min(0, Math.max(H - H * zoom.s, zoom.ty));
+}
+
+function zoomTo(s, px, py) {
+  const card = currentCard();
+  if (!card) return;
+  const max = Math.max(2, actualScale(card) * 4);
+  s = Math.min(max, Math.max(1, s));
+  px ??= card.clientWidth / 2;
+  py ??= card.clientHeight / 2;
+  zoom.tx = px - (px - zoom.tx) * (s / zoom.s);
+  zoom.ty = py - (py - zoom.ty) * (s / zoom.s);
+  zoom.s = s;
+  clampPan(card);
+  applyZoom();
+}
+
+function toggle100(px, py) {
+  const card = currentCard();
+  if (!card) return;
+  if (zoom.s > 1.001) zoomTo(1);
+  else zoomTo(Math.max(actualScale(card), 2), px, py);
+}
+
+$('deck').addEventListener('wheel', (e) => {
+  const card = currentCard();
+  if (!card) return;
+  e.preventDefault();
+  const rect = card.getBoundingClientRect();
+  zoomTo(zoom.s * Math.exp(-e.deltaY * 0.0018), e.clientX - rect.left, e.clientY - rect.top);
+}, { passive: false });
+
+$('zIn').onclick = () => zoomTo(zoom.s * 1.4);
+$('zOut').onclick = () => zoomTo(zoom.s / 1.4);
+$('zFit').onclick = () => zoomTo(1);
+$('z100').onclick = () => { const c = currentCard(); if (c) zoomTo(Math.max(1, actualScale(c))); };
+
+// ================= Arrastre: swipe, paneo y zoom con dos dedos =================
+
+function attachPointer(card) {
+  const pointers = new Map();
+  let mode = null, startX = 0, startY = 0, startTx = 0, startTy = 0, dx = 0;
+  let pinch = null;
+  const likeStamp = card.querySelector('.stamp.like');
+  const nopeStamp = card.querySelector('.stamp.nope');
+  const local = (e) => { const r = card.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+
+  const resetSwipe = () => {
+    card.style.transition = 'transform .25s';
+    card.style.transform = '';
+    likeStamp.style.opacity = nopeStamp.style.opacity = 0;
+  };
+
+  card.addEventListener('pointerdown', (e) => {
+    if (busy || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    pointers.set(e.pointerId, local(e));
+    card.setPointerCapture(e.pointerId);
+    if (pointers.size === 2) {
+      // dos dedos: zoom (se cancela el swipe que había empezado)
+      if (mode === 'swipe') resetSwipe();
+      const [a, b] = [...pointers.values()];
+      pinch = { dist: Math.hypot(a.x - b.x, a.y - b.y) || 1, s: zoom.s };
+      mode = 'pinch';
+      return;
+    }
+    if (pointers.size > 2) return;
+    mode = zoom.s > 1.001 ? 'pan' : 'swipe';
+    startX = e.clientX; startY = e.clientY;
+    startTx = zoom.tx; startTy = zoom.ty;
+    dx = 0;
+    card.style.transition = 'none';
+    if (mode === 'swipe') card.style.cursor = 'grabbing';
+  });
+
+  card.addEventListener('pointermove', (e) => {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, local(e));
+    if (mode === 'pinch' && pointers.size >= 2) {
+      const [a, b] = [...pointers.values()];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      zoomTo(pinch.s * dist / pinch.dist, (a.x + b.x) / 2, (a.y + b.y) / 2);
+      return;
+    }
+    dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    if (mode === 'pan') {
+      zoom.tx = startTx + dx;
+      zoom.ty = startTy + dy;
+      clampPan(card);
+      applyZoom();
+    } else if (mode === 'swipe') {
+      card.style.transform = `translate(${dx}px, ${dy * 0.3}px) rotate(${dx / 22}deg)`;
+      likeStamp.style.opacity = Math.max(0, Math.min(1, dx / SWIPE_THRESHOLD));
+      nopeStamp.style.opacity = Math.max(0, Math.min(1, -dx / SWIPE_THRESHOLD));
+    }
+  });
+
+  const end = (e) => {
+    pointers.delete(e.pointerId);
+    if (mode === 'pinch') {
+      if (pointers.size === 0) mode = null;
+      return;
+    }
+    if (!mode) return;
+    const wasSwipe = mode === 'swipe';
+    mode = null;
+    card.style.cursor = '';
+    if (!wasSwipe) return;
+    if (dx > SWIPE_THRESHOLD) decide('like');
+    else if (dx < -SWIPE_THRESHOLD) decide('nope');
+    else resetSwipe();
+  };
+  card.addEventListener('pointerup', end);
+  card.addEventListener('pointercancel', end);
+
+  card.addEventListener('dblclick', (e) => {
+    const p = local(e);
+    toggle100(p.x, p.y);
+  });
+}
+
+function flyOut(action) {
+  const card = currentCard();
+  if (!card) return Promise.resolve();
+  const sign = action === 'like' ? 1 : -1;
+  card.querySelector(`.stamp.${action}`).style.opacity = 1;
+  card.style.transition = 'transform .32s ease-in';
+  card.style.transform = `translate(${sign * window.innerWidth}px, -60px) rotate(${sign * 28}deg)`;
+  return new Promise((r) => setTimeout(r, 300));
+}
+
+// ================= Decisiones =================
+
+const setupOpen = () => !$('setup').classList.contains('hidden') || !$('browser').classList.contains('hidden') || !$('share').classList.contains('hidden');
+
+async function decide(action) {
+  const cur = S?.window?.[0];
+  if (busy || !cur || setupOpen()) return;
+  busy = true;
+  const thumb = makeThumb(currentCard()?.querySelector('img'));
+  const animation = flyOut(action);
+  try {
+    const st = await api('decide', { id: cur.id, action, thumb });
+    await animation;
+    applyState(st);
+  } catch (e) {
+    await animation;
+    toast(e.message);
+    if (e.state) S = e.state;
+    render();
+  } finally {
+    busy = false;
+  }
+}
+
+async function undo() {
+  if (busy || !S?.canUndo || setupOpen()) return;
+  busy = true;
+  try { applyState(await api('undo', {})); } catch (e) { toast(e.message); } finally { busy = false; }
+}
+
+async function skipFolder() {
+  const cur = S?.window?.[0];
+  if (busy || !cur || setupOpen()) return;
+  busy = true;
+  try {
+    const st = await api('skip-folder', { id: cur.id });
+    toast(`Se saltearon ${st.skipped} fotos de “${cur.folder || 'la carpeta principal'}”`);
+    applyState(st);
+  } catch (e) { toast(e.message); } finally { busy = false; }
+}
+
+// ================= Botones y teclado =================
+
+$('btnLike').onclick = () => decide('like');
+$('btnNope').onclick = () => decide('nope');
+$('btnUndo').onclick = undo;
+$('btnZoom').onclick = () => toggle100();
+$('btnInfo').onclick = () => toggleInfo();
+$('skipFolder').onclick = skipFolder;
+
+function toggleFullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen().catch(() => {});
+}
+
+document.addEventListener('keydown', (e) => {
+  if (setupOpen() || e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
+  const k = e.key.toLowerCase();
+  const actions = {
+    arrowright: () => decide('like'),
+    arrowleft: () => decide('nope'),
+    backspace: undo,
+    arrowup: () => toggleInfo(true),
+    arrowdown: () => toggleInfo(false),
+    i: () => toggleInfo(),
+    z: () => toggle100(),
+    ' ': () => toggle100(),
+    '+': () => zoomTo(zoom.s * 1.4),
+    '=': () => zoomTo(zoom.s * 1.4),
+    '-': () => zoomTo(zoom.s / 1.4),
+    '0': () => zoomTo(1),
+    h: () => document.body.classList.toggle('clean'),
+    s: skipFolder,
+    f: toggleFullscreen,
+  };
+  if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); undo(); return; }
+  if (e.ctrlKey || e.metaKey || e.altKey || !actions[k]) return;
+  e.preventDefault();
+  actions[k]();
+});
+
+// ================= Utilidades =================
+
+function splitName(name) {
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? { base: name.slice(0, dot), ext: name.slice(dot + 1) } : { base: name, ext: '' };
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 ** 2) return (bytes / 1024).toFixed(0) + ' KB';
+  return (bytes / 1024 ** 2).toFixed(1) + ' MB';
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+let toastTimer;
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 3500);
+}
+
+// En el celular el panel de datos arranca cerrado
+if (matchMedia('(max-width: 900px)').matches) document.body.classList.add('no-info');
+poll();
+</script>
+</body>
+</html>

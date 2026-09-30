@@ -1,0 +1,13 @@
+{
+  "name": "kyro-photo-selector",
+  "version": "1.0.0",
+  "description": "Elegí fotos como en Tinder: las que te gustan se copian o mueven a otra carpeta.",
+  "main": "server.js",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
